@@ -1,0 +1,23 @@
+[package]
+name = "azure-notificationhubs-rust"
+version = "0.1.0"
+edition = "2021"
+authors = ["Microsoft Corp."]
+
+[dependencies]
+base64 = "0.13.0"
+chrono = "0.4"
+crypto-mac = "0.11"
+hyper = { version = "0.14", features = ["full"] }
+hyper-tls = "0.5"
+hyperx = "1.4"
+hmac = "0.12"
+http = "0.2"
+sha2 = "0.10"
+thiserror = "1.0"
+tokio = { version = "1", features = ["full"] }
+url = "2.2"
+urlencoding = "2.1"
+
+[dev-dependencies]
+tokio-test = "*"
