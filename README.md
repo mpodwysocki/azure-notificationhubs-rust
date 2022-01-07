@@ -60,3 +60,7 @@ async fn send_direct_notification() {
 - Tag-Based Send
 - Template Send
 - Scheduled Send
+
+## LICENSE
+
+MIT
