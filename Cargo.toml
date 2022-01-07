@@ -1,5 +1,5 @@
 [package]
-name = "azure-notificationhubs-rust"
+name = "azure_notificationhubs"
 version = "0.1.0"
 edition = "2021"
 authors = ["Microsoft Corp."]
