@@ -1,63 +1,14 @@
-use base64::encode as base64encode;
-use hmac::{Hmac, Mac};
+use crate::sas_token_provider::{GenerateSasTokenError, SasTokenProvider};
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::header::{AUTHORIZATION, CONTENT_TYPE};
 use hyper::{Body, Client, Request, StatusCode};
 use hyper_tls::HttpsConnector;
-use sha2::Sha256;
 use std::collections::HashMap;
 use std::str;
 use std::str::FromStr;
-use urlencoding::encode;
 
 /// The API version to use for any requests
 const API_VERSION: &str = "2017-04";
-
-pub struct SasTokenProvider {
-    sas_key_name: String,
-    sas_key_value: String,
-}
-
-impl SasTokenProvider {
-    pub fn generate_sas_token(&self, target_url: &str) -> Result<String, GenerateSasTokenError> {
-        type HmacSHA256 = Hmac<Sha256>;
-        let target_url = target_url.to_lowercase();
-        let expiry_date = chrono::Utc::now() + chrono::Duration::hours(1);
-        let expiry_date_seconds = expiry_date.timestamp();
-        let signature_string = format!(
-            "{}\n{}",
-            &encode(&target_url),
-            &expiry_date_seconds.to_string()
-        );
-
-        let mut hmac_value = HmacSHA256::new_from_slice(self.sas_key_value.as_bytes())
-            .map_err(GenerateSasTokenError::HashingFailed)?;
-
-        hmac_value.update(signature_string.as_bytes());
-        let result = hmac_value.finalize();
-
-        let sas_token = base64encode(result.into_bytes());
-        let sas_token_encoded = encode(&sas_token);
-
-        Ok(format!(
-            "SharedAccessSignature sr={}&sig={}&se={}&skn={}",
-            &encode(&target_url),
-            &sas_token_encoded,
-            &expiry_date_seconds.to_string(),
-            &self.sas_key_name
-        ))
-    }
-}
-
-#[allow(missing_docs)]
-#[non_exhaustive]
-#[derive(Debug, thiserror::Error)]
-pub enum GenerateSasTokenError {
-    #[error("Failed to decode the given private key: {0}")]
-    DecodePrivateKeyError(base64::DecodeError),
-    #[error("Failed to use the given private key for the hashing algorithm: {0}")]
-    HashingFailed(hmac::digest::InvalidLength),
-}
 
 #[allow(missing_docs)]
 #[non_exhaustive]
@@ -162,11 +113,44 @@ impl NotificationHubClient {
         request_message: NotificationRequest,
         device_token: &str,
     ) -> Result<NotificationResponse, NotificationRequestError> {
+        self.send_notification(request_message, Some(device_token), None)
+            .await
+    }
+
+    pub async fn send_tagged_notification(
+        &self,
+        request_message: NotificationRequest,
+        tags: Vec<&str>,
+    ) -> Result<NotificationResponse, NotificationRequestError> {
+        let tag_expression = tags.join("||");
+        self.send_notification(request_message, None, Some(&tag_expression))
+            .await
+    }
+
+    pub async fn send_tag_expression_notification(
+        &self,
+        request_message: NotificationRequest,
+        tag_expression: &str,
+    ) -> Result<NotificationResponse, NotificationRequestError> {
+        self.send_notification(request_message, None, Some(tag_expression))
+            .await
+    }
+
+    async fn send_notification(
+        &self,
+        request_message: NotificationRequest,
+        device_token: Option<&str>,
+        tag_expression: Option<&str>,
+    ) -> Result<NotificationResponse, NotificationRequestError> {
         let https_host = self.host_name.replace("sb://", "https://");
-        let uri = format!(
-            "{}/{}/messages?api-version={}&direct=true",
+        let mut uri = format!(
+            "{}/{}/messages?api-version={}",
             &https_host, &self.hub_name, API_VERSION
         );
+
+        if device_token.is_some() {
+            uri = format!("{}&direct=true", uri);
+        }
 
         let mut request = Request::post(uri);
 
@@ -190,9 +174,18 @@ impl NotificationHubClient {
         let platform_value = HeaderValue::from_str(&request_message.platform).unwrap();
         request = request.header(platform_header, platform_value);
 
-        let device_token_header = HeaderName::from_static("servicebusnotification-devicehandle");
-        let device_token_value = HeaderValue::from_str(device_token).unwrap();
-        request = request.header(device_token_header, device_token_value);
+        if device_token.is_some() {
+            let device_token_header =
+                HeaderName::from_static("servicebusnotification-devicehandle");
+            let device_token_value = HeaderValue::from_str(device_token.unwrap()).unwrap();
+            request = request.header(device_token_header, device_token_value);
+        }
+
+        if tag_expression.is_some() {
+            let tag_expression_header = HeaderName::from_static("ServiceBusNotification-Tags");
+            let tag_expression_value = HeaderValue::from_str(tag_expression.unwrap()).unwrap();
+            request = request.header(tag_expression_header, tag_expression_value);
+        }
 
         let request = request.body(Body::from(request_message.message)).unwrap();
 

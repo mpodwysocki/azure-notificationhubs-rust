@@ -1,9 +1,10 @@
-pub mod service;
+pub mod notification_hub_client;
+pub mod sas_token_provider;
 
 #[cfg(test)]
 mod tests {
 
-    use crate::service::{NotificationHubClient, NotificationRequest};
+    use crate::notification_hub_client::{NotificationHubClient, NotificationRequest};
     use std::collections::HashMap;
 
     const MESSAGE_BODY: &str =

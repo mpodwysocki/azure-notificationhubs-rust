@@ -52,15 +52,16 @@ async fn send_direct_notification() {
 ## Status
 
 - Added Direct Send
+- Tag-Based Send
 
 ### TODO
 
 - Installation Support
 - Registration Support
-- Tag-Based Send
+
 - Template Send
 - Scheduled Send
 
 ## LICENSE
 
-MIT
+[MIT](LICENSE)
