@@ -182,7 +182,7 @@ impl NotificationHubClient {
         }
 
         if tag_expression.is_some() {
-            let tag_expression_header = HeaderName::from_static("ServiceBusNotification-Tags");
+            let tag_expression_header = HeaderName::from_static("servicebusnotification-tags");
             let tag_expression_value = HeaderValue::from_str(tag_expression.unwrap()).unwrap();
             request = request.header(tag_expression_header, tag_expression_value);
         }
