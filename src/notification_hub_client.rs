@@ -1,8 +1,10 @@
 use crate::sas_token_provider::{GenerateSasTokenError, SasTokenProvider};
+use hyper::body::Buf;
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::header::{AUTHORIZATION, CONTENT_TYPE};
 use hyper::{Body, Client, Request, StatusCode};
 use hyper_tls::HttpsConnector;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str;
 use std::str::FromStr;
@@ -36,6 +38,8 @@ pub enum NotificationRequestError {
     InvalidHttpResponse(StatusCode),
     #[error("Generate SAS token error: {0}")]
     GenerateSasTokenError(GenerateSasTokenError),
+    #[error("JSON Serialization Error: {0}")]
+    JsonSerializationError(serde_json::Error),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -56,6 +60,41 @@ pub struct NotificationHubClient {
     hub_name: String,
     host_name: String,
     token_provider: SasTokenProvider,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Installation {
+    pub installation_id: String,
+    pub user_id: String,
+    pub last_active_on: String,
+    pub expiration_time: String,
+    pub last_update: String,
+    pub platform: String,
+    pub push_channel: String,
+    pub expired_push_channel: bool,
+    pub tags: Vec<String>,
+    pub templates: HashMap<String, InstallationTemplate>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallationTemplate {
+    pub body: String,
+    pub headers: HashMap<String, String>,
+    pub tags: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallationPatch {
+    op: String,
+    path: String,
+    value: String,
+}
+
+pub struct InstallationPathResponse {
+    pub content_location: String,
 }
 
 impl NotificationHubClient {
@@ -105,6 +144,147 @@ impl NotificationHubClient {
             hub_name: hub_name.to_string(),
             host_name: host_name.to_string(),
             token_provider,
+        })
+    }
+
+    pub async fn get_installation(
+        &self,
+        installation_id: &str,
+    ) -> Result<Installation, NotificationRequestError> {
+        let https_host = self.host_name.replace("sb://", "https://");
+        let uri = format!(
+            "{}/{}/installations/{}?api-version={}",
+            &https_host, &self.hub_name, installation_id, API_VERSION
+        );
+
+        let mut request = Request::get(uri);
+
+        let sas_token = self
+            .token_provider
+            .generate_sas_token(&self.host_name)
+            .map_err(NotificationRequestError::GenerateSasTokenError)?;
+        let sas_token_header = HeaderValue::from_str(&sas_token).unwrap();
+        request = request.header(AUTHORIZATION, sas_token_header);
+
+        let https = HttpsConnector::new();
+        let client = Client::builder().build::<_, hyper::Body>(https);
+
+        let request = request.body(Body::empty()).unwrap();
+
+        let res = client
+            .request(request)
+            .await
+            .map_err(NotificationRequestError::HttpRequestError)?;
+        if res.status() != StatusCode::OK {
+            return Err(NotificationRequestError::InvalidHttpResponse(res.status()));
+        }
+
+        let body = hyper::body::aggregate(res)
+            .await
+            .map_err(NotificationRequestError::HttpRequestError)?;
+        let installation: Installation = serde_json::from_reader(body.reader())
+            .map_err(NotificationRequestError::JsonSerializationError)?;
+
+        Ok(installation)
+    }
+
+    pub async fn upsert_installation(
+        &self,
+        installation: Installation,
+    ) -> Result<InstallationPathResponse, NotificationRequestError> {
+        let installation_json = serde_json::to_string(&installation)
+            .map_err(NotificationRequestError::JsonSerializationError)?;
+        let installation_id = installation.installation_id;
+        let https_host = self.host_name.replace("sb://", "https://");
+        let uri = format!(
+            "{}/{}/installations/{}?api-version={}",
+            &https_host, &self.hub_name, installation_id, API_VERSION
+        );
+
+        let mut request = Request::put(uri);
+
+        let sas_token = self
+            .token_provider
+            .generate_sas_token(&self.host_name)
+            .map_err(NotificationRequestError::GenerateSasTokenError)?;
+        let sas_token_header = HeaderValue::from_str(&sas_token).unwrap();
+        request = request.header(AUTHORIZATION, sas_token_header);
+
+        let content_type = HeaderValue::from_str("application/json").unwrap();
+        request = request.header(CONTENT_TYPE, content_type);
+
+        let request = request.body(Body::from(installation_json)).unwrap();
+
+        let https = HttpsConnector::new();
+        let client = Client::builder().build::<_, hyper::Body>(https);
+
+        let res = client
+            .request(request)
+            .await
+            .map_err(NotificationRequestError::HttpRequestError)?;
+        if res.status() != StatusCode::OK {
+            return Err(NotificationRequestError::InvalidHttpResponse(res.status()));
+        }
+
+        let mut content_location: Option<&str> = None;
+        if res.headers().contains_key("content-location") {
+            content_location = Some(res.headers()["content-location"].to_str().unwrap());
+        }
+
+        let content_location = content_location.get_or_insert("");
+
+        Ok(InstallationPathResponse {
+            content_location: content_location.to_string(),
+        })
+    }
+
+    pub async fn patch_installation(
+        &self,
+        installation_id: &str,
+        patches: Vec<InstallationPatch>,
+    ) -> Result<InstallationPathResponse, NotificationRequestError> {
+        let patch_json = serde_json::to_string(&patches)
+            .map_err(NotificationRequestError::JsonSerializationError)?;
+        let https_host = self.host_name.replace("sb://", "https://");
+        let uri = format!(
+            "{}/{}/installations/{}?api-version={}",
+            &https_host, &self.hub_name, installation_id, API_VERSION
+        );
+
+        let mut request = Request::patch(uri);
+
+        let sas_token = self
+            .token_provider
+            .generate_sas_token(&self.host_name)
+            .map_err(NotificationRequestError::GenerateSasTokenError)?;
+        let sas_token_header = HeaderValue::from_str(&sas_token).unwrap();
+        request = request.header(AUTHORIZATION, sas_token_header);
+
+        let content_type = HeaderValue::from_str("application/json").unwrap();
+        request = request.header(CONTENT_TYPE, content_type);
+
+        let request = request.body(Body::from(patch_json)).unwrap();
+
+        let https = HttpsConnector::new();
+        let client = Client::builder().build::<_, hyper::Body>(https);
+
+        let res = client
+            .request(request)
+            .await
+            .map_err(NotificationRequestError::HttpRequestError)?;
+        if res.status() != StatusCode::OK {
+            return Err(NotificationRequestError::InvalidHttpResponse(res.status()));
+        }
+
+        let mut content_location: Option<&str> = None;
+        if res.headers().contains_key("content-location") {
+            content_location = Some(res.headers()["content-location"].to_str().unwrap());
+        }
+
+        let content_location = content_location.get_or_insert("");
+
+        Ok(InstallationPathResponse {
+            content_location: content_location.to_string(),
         })
     }
 
